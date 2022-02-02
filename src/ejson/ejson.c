@@ -1,29 +1,211 @@
-﻿#include <string.h>
+﻿#include <stdio.h>
+#include <string.h>
 
 #include "ejson.h"
 
 #if DEBUG > 3
 #include <stdio.h>
 
-#define DBG(FORMAT, ...)               \
-    {                                  \
-        printf(FORMAT, ##__VA_ARGS__); \
+static char printBuf[48];
+
+#define DBG(write_cb, FORMAT, ...)           \
+    {                                        \
+        snprintf(printBuf, sizeof(printBuf), \
+                 FORMAT, ##__VA_ARGS__);     \
+        if (write_cb)                        \
+            write_cb(printBuf);              \
+    }
+
+#define DBGLN(write_cb, FORMAT, ...)            \
+    {                                           \
+        snprintf(printBuf, sizeof(printBuf),    \
+                 FORMAT "\r\n", ##__VA_ARGS__); \
+        if (write_cb)                           \
+            write_cb(printBuf);                 \
     }
 #else
-#define DBG(FORMAT, ...) ;
+#define DBG(write_cb, FORMAT, ...)
+#define DBGLN(write_cb, FORMAT, ...)
 #endif
 
-void ejson_keyval_list_init(struct ejson_ctx *ctx)
+#if DEBUG > 2
+#define INFO(write_cb, FORMAT, ...)          \
+    {                                        \
+        snprintf(printBuf, sizeof(printBuf), \
+                 FORMAT, ##__VA_ARGS__);     \
+        if (write_cb)                        \
+            write_cb(printBuf);              \
+    }
+
+#define INFOLN(write_cb, FORMAT, ...)           \
+    {                                           \
+        snprintf(printBuf, sizeof(printBuf),    \
+                 FORMAT "\r\n", ##__VA_ARGS__); \
+        if (write_cb)                           \
+            write_cb(printBuf);                 \
+    }
+#else
+#define INFO(write_cb, FORMAT, ...)
+#define INFOLN(write_cb, FORMAT, ...)
+#endif
+
+#if DEBUG > 1
+#define ERROR(write_cb, FORMAT, ...)         \
+    {                                        \
+        snprintf(printBuf, sizeof(printBuf), \
+                 FORMAT, ##__VA_ARGS__);     \
+        if (write_cb)                        \
+            write_cb(printBuf);              \
+    }
+
+#define ERRORLN(write_cb, FORMAT, ...)          \
+    {                                           \
+        snprintf(printBuf, sizeof(printBuf),    \
+                 FORMAT "\r\n", ##__VA_ARGS__); \
+        if (write_cb)                           \
+            write_cb(printBuf);                 \
+    }
+#else
+#define ERROR(write_cb, FORMAT, ...)
+#define ERRORLN(write_cb, FORMAT, ...)
+#endif
+
+enum ejson_token_type
+{
+    EJSON_TOKEN_JSON_UNINIT,
+    EJSON_TOKEN_JSON,
+    // EJSON_TOKEN_JSON_START,
+    // EJSON_TOKEN_JSON_END,
+    EJSON_TOKEN_KEYVAL,
+    EJSON_TOKEN_KEY,
+    // EJSON_TOKEN_KEY_START,
+    // EJSON_TOKEN_KEY_END,
+    EJSON_TOKEN_SEP,
+    // EJSON_TOKEN_SEP_START,
+    // EJSON_TOKEN_SEP_END,
+    EJSON_TOKEN_VAL,
+    // EJSON_TOKEN_VAL_START,
+    // EJSON_TOKEN_VAL_END,
+    EJSON_TOKEN_ARRAY,
+    // EJSON_TOKEN_ARRAY_START,
+    // EJSON_TOKEN_ARRAY_END,
+    EJSON_TOKEN_NUM,
+    // EJSON_TOKEN_NUM_START,
+    // EJSON_TOKEN_NUM_END,
+    EJSON_TOKEN_STRING,
+    // EJSON_TOKEN_STRING_START,
+    // EJSON_TOKEN_STRING_END,
+    EJSON_TOKEN_BOOLEAN_TRUE,
+    EJSON_TOKEN_BOOLEAN_FALSE,
+
+    EJSON_TOKEN_NULL_OBJ,
+};
+
+struct ejson_token
+{
+    enum ejson_token_type type;
+    int idx_start;
+    int idx_end;
+};
+
+struct ejson_spad
+{
+    uint8_t *spad;
+    int spad_used;
+    int len;
+};
+
+struct ejson_keyval_node
+{
+    struct ejson_keyval *keyval;
+    struct ejson_keyval_node *next;
+};
+
+struct ejson_internal_ctx
+{
+    struct ejson_spad *spad;
+
+    struct ejson_token token_stack[7];
+    int stacktop;
+
+    struct _4
+    {
+        int num_keyval;
+        struct ejson_keyval_node *head;
+        struct ejson_keyval_node *last_added;
+    } list_keyval;
+
+    struct ejson_internal_ctx *parent_ctx;
+    struct ejson_keyval *parent_keyval;
+
+    debug_write_cb_t dbg_write;
+};
+
+static inline int align(struct ejson_internal_ctx *ctx, int ptr, int align)
+{
+    int offset;
+
+    offset = (ptr % align);
+
+    if (offset > 0)
+    {
+        offset = align - offset;
+        DBGLN(ctx->dbg_write, "Adding %d bytes to align to %d", offset, align);
+    }
+    return offset;
+}
+
+void *ejson_malloc(struct ejson_internal_ctx *ctx, int size)
+{
+    void *ptr;
+
+    ctx->spad->spad_used += align(ctx, ctx->spad->spad_used, sizeof(void *));
+
+    ptr = &ctx->spad->spad[ctx->spad->spad_used];
+    ctx->spad->spad_used += size;
+
+    DBGLN(ctx->dbg_write, "MALLOC RET: %p", ptr);
+
+    return ptr;
+}
+
+void ejson_val_list_init(struct ejson_val_list *list)
+{
+    list->head = NULL;
+    list->last_added = NULL;
+    list->num_vals = 0;
+}
+
+void ejson_val_list_add(struct ejson_internal_ctx *ctx, struct ejson_val_list *list, struct ejson_val *val)
+{
+    struct ejson_val_node *new = (struct ejson_val_node *)ejson_malloc(ctx, sizeof(struct ejson_val_node));
+
+    new->val = val;
+    new->next = NULL;
+
+    if (list->num_vals == 0)
+    {
+        list->head = new;
+    }
+    else
+    {
+        list->last_added->next = new;
+    }
+
+    list->last_added = new;
+    list->num_vals++;
+}
+
+void ejson_keyval_list_init(struct ejson_internal_ctx *ctx)
 {
     ctx->list_keyval.num_keyval = 0;
     ctx->list_keyval.head = NULL;
     ctx->list_keyval.last_added = NULL;
 }
 
-void ejson_keyval_list_add(struct ejson_ctx *ctx, struct ejson_keyval *keyval)
+void ejson_keyval_list_add(struct ejson_internal_ctx *ctx, struct ejson_keyval *keyval)
 {
-    struct ejson_keyval_node *new = (struct ejson_keyval_node *)&ctx->spad[ctx->spad_used];
-    ctx->spad_used += sizeof(struct ejson_keyval_node);
+    struct ejson_keyval_node *new = (struct ejson_keyval_node *)ejson_malloc(ctx, sizeof(struct ejson_keyval_node));
 
     new->keyval = keyval;
     new->next = NULL;
@@ -41,16 +223,44 @@ void ejson_keyval_list_add(struct ejson_ctx *ctx, struct ejson_keyval *keyval)
     ctx->list_keyval.num_keyval++;
 }
 
-int ejson_init_ctx(struct ejson_ctx *ctx, uint8_t *spad, int len_spad)
+static int ejson_init_internal_ctx(struct ejson_internal_ctx *ctx, struct ejson_spad *spad, struct ejson_internal_ctx *parent_ctx, struct ejson_keyval *parent_keyval, debug_write_cb_t dbg_write)
 {
-    if (ctx == NULL)
-        return -1;
-
     ctx->spad = spad;
-    ctx->len_spad = len_spad;
-    ctx->spad_used = 0;
+    ctx->parent_ctx = parent_ctx;
+    ctx->parent_keyval = parent_keyval;
+
+    ctx->stacktop = -1;
+    memset(ctx->token_stack, 0, sizeof(struct ejson_token) * 6);
 
     ejson_keyval_list_init(ctx);
+
+    ctx->dbg_write = dbg_write;
+
+    return 0;
+}
+
+int ejson_init_ctx(struct ejson_ctx *uctx, uint8_t *spadbuf, int len_spadbuf, debug_write_cb_t dbg_write)
+{
+    struct ejson_internal_ctx *ctx;
+    struct ejson_spad *_spad;
+
+    if (uctx == NULL)
+        return -1;
+
+    ctx = (struct ejson_internal_ctx *)uctx;
+
+    _spad = (struct ejson_spad *)spadbuf;
+    _spad->spad = (uint8_t *)(spadbuf + sizeof(struct ejson_spad));
+    _spad->spad_used = 0;
+    _spad->len = len_spadbuf - sizeof(struct ejson_spad);
+
+    ejson_init_internal_ctx(ctx, _spad, NULL, NULL, dbg_write);
+
+    DBGLN(dbg_write, "sizeof(ejson_internal_ctx): %lld", sizeof(struct ejson_internal_ctx));
+    DBGLN(dbg_write, "sizeof(ejson_ctx): %lld", sizeof(struct ejson_ctx));
+    DBGLN(dbg_write, "sizeof(ejson_spad): %lld", sizeof(struct ejson_spad));
+    DBGLN(dbg_write, "sizeof(ejson_token): %lld", sizeof(struct ejson_token));
+    DBGLN(dbg_write, "sizeof(ejson_val): %lld", sizeof(struct ejson_val));
 
     return 0;
 }
@@ -84,353 +294,1175 @@ int ejson_parse_float(char *buf, int len, float *val)
     return 0;
 }
 
-enum ejson_val_parser_state
+static inline struct ejson_token *ejson_push_token(struct ejson_internal_ctx *ctx, enum ejson_token_type type, int start_idx)
 {
-    EJSON_VAL_PARSER_FIND_TYPE,
-    EJSON_VAL_PARSER_FOUND_TYPE,
-    EJSON_VAL_PARSER_FIND_STR_START,
-    EJSON_VAL_PARSER_FOUND_STR_START,
-    EJSON_VAL_PARSER_FIND_STR_END,
-    EJSON_VAL_PARSER_FOUND_STR_END,
-    EJSON_VAL_PARSER_FIND_ARRAY_START,
-    EJSON_VAL_PARSER_FOUND_ARRAY_START,
-    EJSON_VAL_PARSER_FIND_ARRAY_END,
-    EJSON_VAL_PARSER_FOUND_ARRAY_END,
-    EJSON_VAL_PARSER_FIND_NUM_START,
-    EJSON_VAL_PARSER_FOUND_NUM_START,
-    EJSON_VAL_PARSER_FIND_NUM_END,
-    EJSON_VAL_PARSER_FOUND_NUM_END,
+    struct ejson_token *token_top;
 
-};
+    ctx->stacktop++;
 
-int ejson_parse_array(int lvl, uint8_t *buf, int len, struct ejson_keyval *keyval, uint8_t *spad, int spad_len, int *spad_used)
-{
+    token_top = &ctx->token_stack[ctx->stacktop];
+    token_top->type = type;
+    token_top->idx_start = start_idx;
 
+    return token_top;
 }
 
-int ejson_parse_val(int lvl, uint8_t *buf, int len, struct ejson_keyval *keyval, uint8_t *spad, int spad_len, int *spad_used)
+static inline struct ejson_token *ejson_pop_token(struct ejson_internal_ctx *ctx, int end_idx)
 {
-    char temp;
-    int offset = 0;
-    int offset_val;
-    int val_start = 0, val_len;
-    int ret;
-    int _spad_usage = 0;
 
-    enum ejson_val_parser_state state = EJSON_VAL_PARSER_FIND_TYPE;
+    struct ejson_token *token_top;
 
-    if (lvl > 2)
-        return -30;
+    if (ctx->stacktop < 0)
+        return NULL;
 
-    while ((offset < len) && *buf != '\0')
-    {
-        temp = *buf;
+    token_top = &ctx->token_stack[ctx->stacktop];
+    token_top->idx_end = end_idx;
 
-        switch (state)
-        {
-        case EJSON_VAL_PARSER_FIND_TYPE:
-            if (temp == ' ' || temp == '\r' || temp == '\n' || temp == '\t')
-                break;
+    ctx->stacktop--;
 
-            else if (temp == '"')
-            {
-                keyval->type = EJSON_VAL_TYPE_STRING;
-                offset_val = 0;
+    if (ctx->stacktop == -1)
+        return NULL;
 
-                keyval->val = (union ejson_val *)&spad[_spad_usage];
-                _spad_usage += sizeof(union ejson_val);
-
-                keyval->val->str_val.str = &spad[_spad_usage];
-
-                state = EJSON_VAL_PARSER_FIND_STR_START;
-                state = EJSON_VAL_PARSER_FOUND_STR_START;
-                state = EJSON_VAL_PARSER_FIND_STR_END;
-                break;
-            }
-            else if ((temp >= '0' && temp <= '9') || temp == '+' || temp == '-')
-            {
-                DBG("Found NUM start @ %d\r\n", offset);
-
-                keyval->type = EJSON_VAL_TYPE_INT;
-                val_start = offset;
-                offset_val = 0;
-
-                keyval->val = (union ejson_val *)&spad[_spad_usage];
-                _spad_usage += sizeof(union ejson_val);
-
-                keyval->val->str_val.str = &spad[_spad_usage];
-
-                keyval->val->str_val.str[offset_val++] = temp;
-                _spad_usage++;
-
-                state = EJSON_VAL_PARSER_FIND_NUM_START;
-                state = EJSON_VAL_PARSER_FOUND_NUM_START;
-                state = EJSON_VAL_PARSER_FIND_NUM_END;
-
-                break;
-            }
-            else if (temp == '[')
-            {
-
-                keyval->type = EJSON_VAL_TYPE_ARRAY;
-                offset_val = 0;
-
-                keyval->val = (union ejson_val *)&spad[_spad_usage];
-                _spad_usage += sizeof(union ejson_val);
-
-                keyval->val->str_val.str = &spad[_spad_usage];
-
-                state = EJSON_VAL_PARSER_FIND_STR_START;
-                state = EJSON_VAL_PARSER_FOUND_STR_START;
-                state = EJSON_VAL_PARSER_FIND_STR_END;
-                break;
-            }
-            break;
-
-        case EJSON_VAL_PARSER_FIND_STR_END:
-            if (temp == '"')
-            {
-                DBG("Found str end @ %d\r\n", offset);
-                keyval->val->str_val.len = offset_val;
-                keyval->val->str_val.str[offset_val] = '\0';
-                _spad_usage++;
-
-                *spad_used = _spad_usage;
-
-                return 0;
-            }
-
-            keyval->val->str_val.str[offset_val++] = temp;
-            _spad_usage++;
-            break;
-
-        case EJSON_VAL_PARSER_FIND_NUM_END:
-            if (!((temp >= '0' && temp <= '9') || temp == '.'))
-            {
-                keyval->val->str_val.str[offset_val] = '\0';
-                DBG("Found NUM end @ %d\r\n", offset);
-
-                if (keyval->type == EJSON_VAL_TYPE_FLOAT)
-                    ret = ejson_parse_float(keyval->val->str_val.str, offset_val, &keyval->val->f);
-                else
-                    ret = ejson_parse_int(keyval->val->str_val.str, offset_val, &keyval->val->i);
-
-                *spad_used = _spad_usage - offset_val;
-
-                return ret;
-            }
-            if (temp == '.')
-            {
-                DBG("Changing type of number to float\r\n")
-                keyval->type = EJSON_VAL_TYPE_FLOAT;
-            }
-
-            keyval->val->str_val.str[offset_val++] = temp;
-            _spad_usage++;
-
-        default:
-            break;
-        }
-
-        buf++;
-        offset++;
-    }
-
-    if (state == EJSON_VAL_PARSER_FIND_NUM_END)
-    {
-        keyval->val->str_val.str[offset_val] = '\0';
-        DBG("Found NUM end @ %d\r\n", offset);
-
-        if (keyval->type == EJSON_VAL_TYPE_FLOAT)
-            ret = ejson_parse_float(keyval->val->str_val.str, offset_val, &keyval->val->f);
-        else
-            ret = ejson_parse_int(keyval->val->str_val.str, offset_val, &keyval->val->i);
-
-        *spad_used = _spad_usage - offset_val;
-
-        return ret;
-    }
-
-    return -50;
+    return &ctx->token_stack[ctx->stacktop];
 }
 
-enum ejson_parser_state
+int ejson_loads(char *buf, int len, struct ejson_ctx *uctx)
 {
-    EJSON_PARSER_STATE_FIND_JSON_START,
-    EJSON_PARSER_STATE_FOUND_JSON_START,
-    EJSON_PARSER_STATE_FIND_JSON_END,
-    EJSON_PARSER_STATE_FOUND_JSON_END,
-    EJSON_PARSER_STATE_FIND_KEY_START,
-    EJSON_PARSER_STATE_FOUND_KEY_START,
-    EJSON_PARSER_STATE_FIND_KEY_END,
-    EJSON_PARSER_STATE_FOUND_KEY_END,
-    EJSON_PARSER_STATE_FIND_SEP,
-    EJSON_PARSER_STATE_FOUND_SEP,
-    EJSON_PARSER_STATE_FIND_VAL_START,
-    EJSON_PARSER_STATE_FOUND_VAL_START,
-    EJSON_PARSER_STATE_FIND_VAL_END,
-    EJSON_PARSER_STATE_FOUND_VAL_END,
-    EJSON_PARSER_STATE_FIND_COMMA,
-    EJSON_PARSER_STATE_FOUND_COMMA,
-};
-
-int ejson_loads(char *buf, int len, struct ejson_ctx *ctx)
-{
-    enum ejson_parser_state state = EJSON_PARSER_STATE_FIND_JSON_START;
+    struct ejson_internal_ctx *ctx = (struct ejson_internal_ctx *)uctx;
     int offset = 0;
-    int offset_key = 0, offset_val_start = 0, val_len = 0;
     uint8_t temp;
-    int ret, spad_used = 0;
-    struct ejson_keyval *keyval;
+    uint8_t *temp_str;
+    int temp_str_len = 0;
+    int ret;
+    struct ejson_token *token_top = NULL;
+    int isEscaped = 0;
 
     /* Set number of found keyvals to 0 */
-    ejson_keyval_list_init(ctx);
-    ctx->spad_used = 0;
+    ctx->spad->spad_used = 0;
+
+    ejson_init_internal_ctx(ctx, ctx->spad, NULL, NULL, ctx->dbg_write);
+
+    struct ejson_keyval *curKeyVal = NULL;
+    struct ejson_val *curVal = NULL;
+    struct ejson_internal_ctx *parJsonCtx = NULL;
+    struct ejson_internal_ctx *curJsonCtx = ctx;
 
     while ((offset < len) && buf[offset] != '\0')
     {
         temp = buf[offset++];
+        if (temp == ' ' || temp == '\r' || temp == '\n' || temp == '\t')
+            continue;
 
-        switch (state)
+        else if (temp == '{')
         {
-        case EJSON_PARSER_STATE_FIND_JSON_START:
+            token_top = ejson_push_token(curJsonCtx, EJSON_TOKEN_JSON, offset);
+            break;
+        }
+        else if (temp == '[')
+        {
+            token_top = ejson_push_token(curJsonCtx, EJSON_TOKEN_ARRAY, offset);
+            break;
+        }
+
+        ERRORLN(curJsonCtx->dbg_write, "Invalid token @ %d, expected '{'", offset);
+        return -30;
+    }
+
+    if (token_top == NULL)
+    {
+        INFO(curJsonCtx->dbg_write, "Empty string or No JSON found\r\n");
+        return -70;
+    }
+
+    while ((offset < len) && buf[offset] != '\0')
+    {
+        temp = buf[offset];
+
+        switch (token_top->type)
+        {
+        case EJSON_TOKEN_JSON_UNINIT:
             if (temp == ' ' || temp == '\r' || temp == '\n' || temp == '\t')
                 break;
 
-            if (temp == '{')
+            else if (temp == '{')
             {
-                DBG("JSON start found\r\n");
-                state = EJSON_PARSER_STATE_FOUND_JSON_START;
-                state = EJSON_PARSER_STATE_FIND_KEY_START;
+                token_top = ejson_push_token(curJsonCtx, EJSON_TOKEN_JSON, offset);
+                break;
             }
-            else
-                /* Invalid JSON string */
-                return -10;
+
+            DBG(curJsonCtx->dbg_write, "Invalid token @ %d, expected '{'", offset);
             break;
-        case EJSON_PARSER_STATE_FIND_KEY_START:
+        case EJSON_TOKEN_JSON:
             if (temp == ' ' || temp == '\r' || temp == '\n' || temp == '\t')
                 break;
-            if (temp == '"')
+            else if (temp == '"')
             {
+                DBG(curJsonCtx->dbg_write, "Key start found @ %d\r\n", offset);
 
-                DBG("JSON key start found @ %d\r\n", offset);
-                offset_key = 0;
+                token_top = ejson_push_token(curJsonCtx, EJSON_TOKEN_KEYVAL, offset);
+                token_top = ejson_push_token(curJsonCtx, EJSON_TOKEN_KEY, offset);
 
-                keyval = (struct ejson_keyval *)&ctx->spad[ctx->spad_used];
-                ctx->spad_used += sizeof(struct ejson_keyval);
+                /* Allocate JSON keyval element */
+                curKeyVal = (struct ejson_keyval *)ejson_malloc(curJsonCtx, sizeof(struct ejson_keyval));
+                curKeyVal->force_array = 0;
 
-                keyval->key_len = 0;
-                keyval->key = (char *)&ctx->spad[ctx->spad_used++];
-                *keyval->key = '\0';
+                /* Add key val to list */
+                ejson_keyval_list_add(curJsonCtx, curKeyVal);
 
-                state = EJSON_PARSER_STATE_FOUND_KEY_START;
-                state = EJSON_PARSER_STATE_FIND_KEY_END;
+                // Moved this member to individual value struct
+                // curKeyVal->type = EJSON_VAL_TYPE_UNK;
+
+                /* Allocate and init val list */
+                curKeyVal->list_val = (struct ejson_val_list *)ejson_malloc(curJsonCtx, sizeof(struct ejson_val_list));
+
+                ejson_val_list_init(curKeyVal->list_val);
+
+                /* Init keyval */
+                curKeyVal->key = ejson_malloc(curJsonCtx, 1);
+
+                curKeyVal->key[0] = '\0';
+                curKeyVal->key_len = 0;
+
                 break;
             }
-            if (temp == '}')
+            else if (temp == '}')
             {
-                DBG("JSON end found @ %d\r\n", offset);
-                DBG("Total spad used: %d\r\n", ctx->spad_used);
-
-                state = EJSON_PARSER_STATE_FOUND_JSON_END;
-                return 0;
-            }
-            break;
-        case EJSON_PARSER_STATE_FIND_KEY_END:
-            if (temp == '"')
-            {
-
-                DBG("JSON key end found @ %d\r\n", offset);
-                keyval->key[offset_key] = '\0';
-                ctx->spad_used++;
-
-                state = EJSON_PARSER_STATE_FOUND_KEY_END;
-                state = EJSON_PARSER_STATE_FIND_SEP;
-                break;
-            }
-            if (offset_key == 63)
-                continue;
-
-            keyval->key[offset_key++] = temp;
-            ctx->spad_used++;
-            break;
-
-        case EJSON_PARSER_STATE_FIND_SEP:
-            if (temp == ' ' || temp == '\r' || temp == '\n' || temp == '\t')
-                break;
-
-            if (temp != ':')
-                return -11;
-
-            DBG("KeyVal SEP found @ %d\r\n", offset);
-
-            offset_val_start = offset;
-            val_len = 0;
-
-            state = EJSON_PARSER_STATE_FOUND_SEP;
-            state = EJSON_PARSER_STATE_FOUND_VAL_START;
-
-            break;
-
-        case EJSON_PARSER_STATE_FOUND_VAL_START:
-
-            if (temp == '}')
-            {
-                DBG("JSON val end found @ %d\r\n", offset - 1);
-
-                ret = ejson_parse_val(0, &buf[offset_val_start], val_len, keyval, &ctx->spad[ctx->spad_used], ctx->len_spad - ctx->spad_used, &spad_used);
-                if (ret != 0)
+                if (curJsonCtx->parent_ctx == NULL)
                 {
-                    DBG("Unable to parse value for key %s", keyval->key);
-                    return ret;
+                    /* Pased JSON successfully */
+                    INFO(curJsonCtx->dbg_write, "End of root JSON\r\n");
+                    INFO(curJsonCtx->dbg_write, "Total scratchpad used: %d Bytes\r\n", ctx->spad->spad_used);
+                    return 0;
+                }
+                else
+                {
+                    curKeyVal = curJsonCtx->parent_keyval;
+                    curJsonCtx = curJsonCtx->parent_ctx;
+
+                    token_top = &curJsonCtx->token_stack[curJsonCtx->stacktop];
                 }
 
-                ctx->spad_used += spad_used;
+                break;
+            }
 
-                DBG("JSON end found @ %d\r\n", offset);
-                DBG("Total spad used: %d\r\n", ctx->spad_used);
+            /* Malformed json */
+            ERRORLN(curJsonCtx->dbg_write, "Invalid token @ %d, expected '\"' or '}'\r\n", offset)
+            return -30;
 
-                state = EJSON_PARSER_STATE_FOUND_JSON_END;
+            break;
+        case EJSON_TOKEN_KEY:
+            if (isEscaped == 1)
+            {
+                isEscaped = 0;
+                break;
+            }
+            if (temp == '\\')
+            {
+                isEscaped = 1;
+                break;
+            }
 
-                ejson_keyval_list_add(ctx, keyval);
+            if (temp == '"')
+            {
+                DBG(curJsonCtx->dbg_write, "Key end found @ %d\r\n", offset);
 
-                return 0;
+                /* Add END of string to Key */
+                curKeyVal->key[curKeyVal->key_len] = '\0';
+                curJsonCtx->spad->spad_used++;
+
+                token_top = ejson_pop_token(curJsonCtx, offset);
+
+                token_top = ejson_push_token(curJsonCtx, EJSON_TOKEN_SEP, offset + 1);
+                break;
+            }
+
+            /* Add character to Key */
+            curKeyVal->key[curKeyVal->key_len++] = temp;
+            curJsonCtx->spad->spad_used++;
+            break;
+
+        case EJSON_TOKEN_SEP:
+            if (temp == ' ' || temp == '\r' || temp == '\n' || temp == '\t')
+                break;
+
+            if (temp == ':')
+            {
+                token_top = ejson_pop_token(curJsonCtx, offset);
+                token_top = ejson_push_token(curJsonCtx, EJSON_TOKEN_VAL, offset);
+                break;
+            }
+
+            /* Malformed json */
+            ERRORLN(curJsonCtx->dbg_write, "Invalid token @ %d, expected ':'\r\n", offset)
+            return -30;
+
+            break;
+
+        case EJSON_TOKEN_VAL:
+            if (temp == ' ' || temp == '\r' || temp == '\n' || temp == '\t')
+                break;
+
+            if (temp == '"')
+            {
+
+                DBG(curJsonCtx->dbg_write, "String start found @ %d\r\n", offset);
+                token_top = ejson_push_token(curJsonCtx, EJSON_TOKEN_STRING, offset);
+
+                curVal = (struct ejson_val *)ejson_malloc(ctx, sizeof(struct ejson_val));
+                curVal->type = EJSON_VAL_TYPE_STRING;
+                ejson_val_list_add(curJsonCtx, curKeyVal->list_val, curVal);
+
+                curVal->val.str_val.len = 0;
+                curVal->val.str_val.str = ejson_malloc(ctx, 1);
+
+                curVal->val.str_val.str[0] = '\0';
+
+                break;
+            }
+            else if ((temp >= '0' && temp <= '9') || temp == '+' || temp == '-')
+            {
+                DBG(curJsonCtx->dbg_write, "NUM start found @ %d\r\n", offset);
+                token_top = ejson_push_token(curJsonCtx, EJSON_TOKEN_NUM, offset);
+
+                curVal = (struct ejson_val *)ejson_malloc(ctx, sizeof(struct ejson_val));
+                curVal->type = EJSON_VAL_TYPE_INT;
+                ejson_val_list_add(curJsonCtx, curKeyVal->list_val, curVal);
+
+                temp_str = &curJsonCtx->spad->spad[curJsonCtx->spad->spad_used];
+                temp_str[0] = temp;
+                temp_str_len = 1;
+                break;
+            }
+            else if (temp == 't' || temp == 'T')
+            {
+                DBG(curJsonCtx->dbg_write, "Boolean 'true' start found @ %d\r\n", offset);
+
+                token_top = ejson_push_token(curJsonCtx, EJSON_TOKEN_BOOLEAN_TRUE, offset);
+
+                curVal = (struct ejson_val *)ejson_malloc(ctx, sizeof(struct ejson_val));
+                curVal->type = ESJON_VAL_TYPE_BOOLEAN;
+                ejson_val_list_add(curJsonCtx, curKeyVal->list_val, curVal);
+
+                temp_str = &curJsonCtx->spad->spad[curJsonCtx->spad->spad_used];
+
+                /* Convert capital character to lower case */
+                if (temp >= 'A' && temp <= 'Z')
+                    temp = temp - 'A' + 'a';
+
+                temp_str[0] = temp;
+                temp_str_len = 1;
+                break;
+            }
+            else if (temp == 'f' || temp == 'F')
+            {
+                DBG(curJsonCtx->dbg_write, "Boolean 'false' start found @ %d\r\n", offset);
+
+                token_top = ejson_push_token(curJsonCtx, EJSON_TOKEN_BOOLEAN_FALSE, offset);
+
+                curVal = (struct ejson_val *)ejson_malloc(ctx, sizeof(struct ejson_val));
+                curVal->type = ESJON_VAL_TYPE_BOOLEAN;
+                ejson_val_list_add(curJsonCtx, curKeyVal->list_val, curVal);
+
+                temp_str = &curJsonCtx->spad->spad[curJsonCtx->spad->spad_used];
+
+                /* Convert capital character to lower case */
+                if (temp >= 'A' && temp <= 'Z')
+                    temp = temp - 'A' + 'a';
+
+                temp_str[0] = temp;
+                temp_str_len = 1;
+                break;
+            }
+            else if (temp == 'n' || temp == 'N')
+            {
+                DBG(curJsonCtx->dbg_write, "'null' start found @ %d\r\n", offset);
+
+                token_top = ejson_push_token(curJsonCtx, EJSON_TOKEN_NULL_OBJ, offset);
+
+                curVal = (struct ejson_val *)ejson_malloc(ctx, sizeof(struct ejson_val));
+                curVal->type = EJSON_VAL_TYPE_NULL_OBJ;
+                ejson_val_list_add(curJsonCtx, curKeyVal->list_val, curVal);
+
+                temp_str = &curJsonCtx->spad->spad[curJsonCtx->spad->spad_used];
+
+                /* Convert capital character to lower case */
+                if (temp >= 'A' && temp <= 'Z')
+                    temp = temp - 'A' + 'a';
+
+                temp_str[0] = temp;
+                temp_str_len = 1;
+                break;
+            }
+            else if (temp == '[')
+            {
+                DBG(curJsonCtx->dbg_write, "ARR start found @ %d\r\n", offset);
+                token_top = ejson_push_token(curJsonCtx, EJSON_TOKEN_ARRAY, offset);
+                token_top = ejson_push_token(curJsonCtx, EJSON_TOKEN_VAL, offset);
+
+                curKeyVal->force_array = 1;
+
+                break;
+            }
+            else if (temp == '{')
+            {
+                DBG(curJsonCtx->dbg_write, "JSON start found @ %d\r\n", offset);
+
+                curVal = (struct ejson_val *)ejson_malloc(ctx, sizeof(struct ejson_val));
+                curVal->type = EJSON_VAL_TYPE_JSON;
+                ejson_val_list_add(curJsonCtx, curKeyVal->list_val, curVal);
+
+                /* Allocate new JSON ctx */
+                parJsonCtx = curJsonCtx;
+                curJsonCtx = (struct ejson_internal_ctx *)ejson_malloc(ctx, sizeof(struct ejson_ctx));
+
+                ejson_init_internal_ctx(curJsonCtx, parJsonCtx->spad, parJsonCtx, curKeyVal, ctx->dbg_write);
+
+                curVal->val.ctx = (struct ejson_ctx *)curJsonCtx;
+
+                token_top = ejson_push_token(curJsonCtx, EJSON_TOKEN_JSON, offset);
+
+                curKeyVal = NULL;
+                break;
+            }
+            else if (temp == ']')
+            {
+                DBG(curJsonCtx->dbg_write, "ARR end found @ %d\r\n", offset);
+                /* POP VAL INSIDE AN ARRAY */
+                token_top = ejson_pop_token(curJsonCtx, offset);
+
+                /* POP  AN ARRAY ELEMENT */
+                token_top = ejson_pop_token(curJsonCtx, offset);
+
+                /* POP VAL ELEMENT INSODE KEYVAL */
+                token_top = ejson_pop_token(curJsonCtx, offset);
+
+                break;
+            }
+            else if (temp == '}')
+            {
+                DBG(curJsonCtx->dbg_write, "JSON end found @ %d\r\n", offset);
+                if (curJsonCtx->parent_ctx == NULL)
+                {
+                    /* Pased JSON successfully */
+                    INFO(curJsonCtx->dbg_write, "End of root JSON\r\n");
+                    INFO(curJsonCtx->dbg_write, "Total scratchpad used: %d Bytes\r\n", ctx->spad->spad_used);
+                    return 0;
+                }
+                else
+                {
+                    curKeyVal = curJsonCtx->parent_keyval;
+                    curJsonCtx = curJsonCtx->parent_ctx;
+                    token_top = &curJsonCtx->token_stack[curJsonCtx->stacktop];
+                }
+
+                break;
+            }
+
+            /* Malformed json */
+            ERRORLN(curJsonCtx->dbg_write, "Invalid token @ %d, expected '\"' or '[' or a number\r\n", offset)
+            return -30;
+
+            break;
+
+        case EJSON_TOKEN_ARRAY:
+
+            if (temp == ' ' || temp == '\r' || temp == '\n' || temp == '\t')
+                break;
+            if (temp != ']' && temp != ',')
+            {
+                /* Malformed json */
+                ERRORLN(curJsonCtx->dbg_write, "Invalid token @ %d, expected ']'\r\n", offset)
+                return -30;
             }
 
             if (temp == ',')
             {
-                DBG("JSON val end found @ %d\r\n", offset);
+                DBG(curJsonCtx->dbg_write, "Val element end found @ %d\r\n", offset);
+                token_top = ejson_push_token(curJsonCtx, EJSON_TOKEN_VAL, offset);
+                break;
+            }
+            else if (temp == ']')
+            {
+                /* POP ARRAY TOKEN */
+                token_top = ejson_pop_token(curJsonCtx, offset);
 
-                ret = ejson_parse_val(0, &buf[offset_val_start], val_len, keyval, &ctx->spad[ctx->spad_used], ctx->len_spad - ctx->spad_used, &spad_used);
-
-                if (ret != 0)
-                {
-                    DBG("Unable to parse value for key %s", keyval->key);
-                    return ret;
-                }
-
-                ctx->spad_used += spad_used;
-
-                ejson_keyval_list_add(ctx, keyval);
-
-                state = EJSON_PARSER_STATE_FOUND_VAL_END;
-                state = EJSON_PARSER_STATE_FIND_COMMA;
-                state = EJSON_PARSER_STATE_FOUND_COMMA;
-                state = EJSON_PARSER_STATE_FIND_KEY_START;
+                /* POP VAL TOKEN */
+                token_top = ejson_pop_token(curJsonCtx, offset);
                 break;
             }
 
-            val_len++;
+            break;
+
+        case EJSON_TOKEN_STRING:
+            if (isEscaped == 1)
+            {
+                isEscaped = 0;
+
+                if (temp == 'n')
+                    temp = '\n';
+                else if (temp == 'r')
+                    temp = '\r';
+                else if (temp == 't')
+                    temp = '\t';
+                else if (temp == '\b')
+                    temp = '\b';
+
+                /* Add character to Key */
+                curVal->val.str_val.str[curVal->val.str_val.len++] = temp;
+                ctx->spad->spad_used++;
+                break;
+            }
+            else
+            {
+                if (temp == '\\')
+                {
+                    isEscaped = 1;
+                    break;
+                }
+            }
+
+            if (temp == '"')
+            {
+                DBG(curJsonCtx->dbg_write, "String end found @ %d\r\n", offset);
+
+                curVal->val.str_val.str[curVal->val.str_val.len] = '\0';
+
+                /* POP STRING TOKEN */
+                token_top = ejson_pop_token(curJsonCtx, offset);
+
+                /* POP VAL TOKEN */
+                token_top = ejson_pop_token(curJsonCtx, offset);
+                break;
+            }
+
+            /* Add character to Key */
+            curVal->val.str_val.str[curVal->val.str_val.len++] = temp;
+            ctx->spad->spad_used++;
+            break;
+        case EJSON_TOKEN_BOOLEAN_TRUE:
+            /* Convert capital character to lower case */
+            if (temp >= 'A' && temp <= 'Z')
+                temp = temp - 'A' + 'a';
+
+            if (!((temp == 'r') || (temp == 'u') || (temp == 'e')))
+            {
+                DBG(curJsonCtx->dbg_write, "Boolean 'true' end found @ %d\r\n", offset);
+
+                temp_str[temp_str_len] = '\0';
+
+                if (strncmp((char *)temp_str, "true", 4) != 0)
+                {
+                    ERRORLN(curJsonCtx->dbg_write, "Unable to parse boolean 'true' value @ %d", offset);
+
+                    /* Value ERROR */
+                    return -20;
+                }
+
+                curVal->val.booleanVal = 1;
+
+                /* POP STRING TOKEN */
+                token_top = ejson_pop_token(curJsonCtx, offset);
+
+                /* POP VAL TOKEN */
+                token_top = ejson_pop_token(curJsonCtx, offset);
+
+                /* This is done to check if this character is the ','
+                 * which should be treated as end of KeyVal pair.
+                 */
+                offset--;
+                break;
+            }
+
+            /* Add character to temp buffer */
+            temp_str[temp_str_len++] = temp;
 
             break;
-        default:
+        case EJSON_TOKEN_BOOLEAN_FALSE:
+            /* Convert capital character to lower case */
+            if (temp >= 'A' && temp <= 'Z')
+                temp = temp - 'A' + 'a';
+
+            if (!((temp == 'a') || (temp == 'l') || (temp == 's') || (temp == 'e')))
+            {
+                DBG(curJsonCtx->dbg_write, "Boolean 'false' end found @ %d\r\n", offset);
+
+                temp_str[temp_str_len] = '\0';
+
+                if (strncmp((char *)temp_str, "false", 5) != 0)
+                {
+                    ERRORLN(curJsonCtx->dbg_write, "Unable to parse boolean 'false' value @ %d", offset);
+
+                    /* Value ERROR */
+                    return -20;
+                }
+
+                curVal->val.booleanVal = 0;
+
+                /* POP STRING TOKEN */
+                token_top = ejson_pop_token(curJsonCtx, offset);
+
+                /* POP VAL TOKEN */
+                token_top = ejson_pop_token(curJsonCtx, offset);
+
+                /* This is done to check if this character is the ','
+                 * which should be treated as end of KeyVal pair.
+                 */
+                offset--;
+
+                break;
+            }
+
+            /* Add character to temp buffer */
+            temp_str[temp_str_len++] = temp;
             break;
+        case EJSON_TOKEN_NULL_OBJ:
+            /* Convert capital character to lower case */
+            if (temp >= 'A' && temp <= 'Z')
+                temp = temp - 'A' + 'a';
+
+            if (!((temp == 'u') || (temp == 'l')))
+            {
+                DBG(curJsonCtx->dbg_write, "'null' end found @ %d\r\n", offset);
+
+                temp_str[temp_str_len] = '\0';
+
+                if (strncmp((char *)temp_str, "null", 4) != 0)
+                {
+                    ERRORLN(curJsonCtx->dbg_write, "Unable to parse 'null' value @ %d", offset);
+
+                    /* Value ERROR */
+                    return -20;
+                }
+
+                /* POP STRING TOKEN */
+                token_top = ejson_pop_token(curJsonCtx, offset);
+
+                /* POP VAL TOKEN */
+                token_top = ejson_pop_token(curJsonCtx, offset);
+
+                /* This is done to check if this character is the ','
+                 * which should be treated as end of KeyVal pair.
+                 */
+                offset--;
+
+                break;
+            }
+
+            /* Add character to temp buffer */
+            temp_str[temp_str_len++] = temp;
+            break;
+        case EJSON_TOKEN_NUM:
+            if (!((temp >= '0' && temp <= '9') || temp == '.' || temp == 'E' || temp == 'e' || temp == '-'))
+            {
+                DBG(curJsonCtx->dbg_write, "Found NUM end @ %d\r\n", offset);
+                temp_str[temp_str_len] = '\0';
+
+                if (curVal->type == EJSON_VAL_TYPE_FLOAT)
+                    ret = ejson_parse_float((char *)temp_str, temp_str_len, &curVal->val.f);
+                else
+                    ret = ejson_parse_int((char *)temp_str, temp_str_len, &curVal->val.i);
+
+                if (ret != 0)
+                {
+                    ERRORLN(curJsonCtx->dbg_write, "Unable to parse numerical value @ %d", offset);
+
+                    /* Value ERROR */
+                    return -20;
+                }
+
+                /* POP NUM TOKEN */
+                token_top = ejson_pop_token(curJsonCtx, offset);
+
+                /* POP VAL TOKEN */
+                token_top = ejson_pop_token(curJsonCtx, offset);
+
+                /* This is done to check if this character is the ','
+                 * which should be treated as end of KeyVal pair
+                 */
+                offset--;
+
+                break;
+            }
+            if (temp == '.' || temp == 'E' || temp == 'e')
+            {
+                DBG(curJsonCtx->dbg_write, "Changing type of number to float\r\n")
+                curVal->type = EJSON_VAL_TYPE_FLOAT;
+            }
+
+            temp_str[temp_str_len++] = temp;
+            break;
+
+        case EJSON_TOKEN_KEYVAL:
+            if (temp == ' ' || temp == '\r' || temp == '\n' || temp == '\t')
+                break;
+
+            if (temp != ',' && temp != ']' && temp != '}')
+            {
+                /* Malformed json */
+                ERRORLN(curJsonCtx->dbg_write, "Invalid token @ %d, expected ',' or ']' or '}'\r\n", offset)
+                return -30;
+            }
+
+            /* Pop keyval */
+            token_top = ejson_pop_token(curJsonCtx, offset);
+
+            /* In case of both end of an array or end of a JSON ',' denotes end of val or key val resp. */
+            if (temp == ',')
+            {
+                DBG(curJsonCtx->dbg_write, "Keyval-pair or val element end found @ %d\r\n", offset);
+
+                break;
+            }
+
+            if (token_top->type == EJSON_TOKEN_ARRAY)
+            {
+                if (temp == ']')
+                {
+                    /* Pop keyval */
+                    token_top = ejson_pop_token(curJsonCtx, offset);
+                }
+            }
+            else
+            {
+                if (temp == '}')
+                {
+                    if (curJsonCtx->parent_ctx == NULL)
+                    {
+                        /* Pased JSON successfully */
+                        INFO(curJsonCtx->dbg_write, "End of root JSON\r\n");
+                        INFO(curJsonCtx->dbg_write, "Total scratchpad used: %d Bytes\r\n", ctx->spad->spad_used);
+                        return 0;
+                    }
+                    else
+                    {
+                        curKeyVal = curJsonCtx->parent_keyval;
+                        curJsonCtx = curJsonCtx->parent_ctx;
+
+                        token_top = ejson_pop_token(curJsonCtx, offset);
+                    }
+
+                    break;
+                }
+            }
         }
+
+        offset++;
     }
 
     return -255;
 }
 
-int ejson_dumps(struct ejson_ctx *ctx, char *buf, int len)
+int ejson_dump_indent(char *buf, int len, int indentLvl)
 {
+    int i, j, offset = 0;
+
+    for (j = 0; j < indentLvl; j++)
+        for (i = 0; i < 4; i++)
+            buf[offset++] = ' ';
+
+    return offset;
 }
+
+static int ejson_dumps_internal(struct ejson_ctx *uctx, char *buf, int len, int indentLvl, int indentFisrtLine, int isPretty);
+
+static int ejson_dump_list(struct ejson_val_list *list, char *buf, int len, int nodeidx, int indentLvl, int forceArray, int isPretty)
+{
+    int j, offset = 0;
+    int isArray = 0;
+
+    struct ejson_val_node *v_node = list->head;
+
+    if (list->num_vals > 1 || forceArray)
+        isArray = 1;
+
+    if (isArray)
+    {
+        indentLvl++;
+
+        // offset += snprintf(&buf[offset], (len - offset), "[\r\n");
+        buf[offset++] = '[';
+    }
+
+    if (list->num_vals > 0)
+    {
+
+        for (j = 0; j < (list->num_vals - 1); j++)
+        {
+            switch (v_node->val->type)
+            {
+            case EJSON_VAL_TYPE_STRING:
+                if (isArray && isPretty)
+                {
+                    buf[offset++] = '\r';
+                    buf[offset++] = '\n';
+
+                    offset += ejson_dump_indent(&buf[offset], (len - offset), indentLvl);
+                }
+                offset += snprintf(&buf[offset], (len - offset), "\"%s\",", v_node->val->val.str_val.str);
+                // if (isPretty)
+                // {
+                //     buf[offset++] = '\r';
+                //     buf[offset++] = '\n';
+                // }
+                break;
+            case EJSON_VAL_TYPE_INT:
+                if (isArray && isPretty)
+                {
+                    buf[offset++] = '\r';
+                    buf[offset++] = '\n';
+                    offset += ejson_dump_indent(&buf[offset], (len - offset), indentLvl);
+                }
+                offset += snprintf(&buf[offset], (len - offset), "%d,", v_node->val->val.i);
+                // if (isPretty)
+                // {
+                //     buf[offset++] = '\r';
+                //     buf[offset++] = '\n';
+                // }
+                break;
+            case ESJON_VAL_TYPE_BOOLEAN:
+                if (isArray && isPretty)
+                {
+                    buf[offset++] = '\r';
+                    buf[offset++] = '\n';
+                    offset += ejson_dump_indent(&buf[offset], (len - offset), indentLvl);
+                }
+                offset += snprintf(&buf[offset], (len - offset), "%s,", v_node->val->val.booleanVal ? "true" : "false");
+                // if (isPretty)
+                // {
+                //     buf[offset++] = '\r';
+                //     buf[offset++] = '\n';
+                // }
+                break;
+            case EJSON_VAL_TYPE_NULL_OBJ:
+                if (isArray && isPretty)
+                {
+                    buf[offset++] = '\r';
+                    buf[offset++] = '\n';
+                    offset += ejson_dump_indent(&buf[offset], (len - offset), indentLvl);
+                }
+                offset += snprintf(&buf[offset], (len - offset), "null,");
+                // if (isPretty)
+                // {
+                //     buf[offset++] = '\r';
+                //     buf[offset++] = '\n';
+                // }
+                break;
+            case EJSON_VAL_TYPE_FLOAT:
+                if (isArray && isPretty)
+                {
+                    buf[offset++] = '\r';
+                    buf[offset++] = '\n';
+
+                    offset += ejson_dump_indent(&buf[offset], (len - offset), indentLvl);
+                }
+                offset += snprintf(&buf[offset], (len - offset), "%.5f,", v_node->val->val.f);
+                // if (isPretty)
+                // {
+                //     buf[offset++] = '\r';
+                //     buf[offset++] = '\n';
+                // }
+                break;
+            case EJSON_VAL_TYPE_JSON:
+                // if (isArray && isPretty && 0)
+                //     offset += snprintf(&buf[offset], (len - offset), "\r\n");
+                if (isArray && isPretty)
+                    buf[offset++] = ' ';
+                offset += ejson_dumps_internal(v_node->val->val.ctx, (char *)&buf[offset], (len - offset), indentLvl, 0, isPretty);
+                // offset += snprintf(&buf[offset], (len - offset), ",\r\n");
+                buf[offset++] = ',';
+
+                break;
+            default:
+                break;
+            }
+            v_node = v_node->next;
+        }
+
+        switch (v_node->val->type)
+        {
+        case EJSON_VAL_TYPE_STRING:
+            if (isArray && isPretty)
+            {
+                buf[offset++] = '\r';
+                buf[offset++] = '\n';
+                offset += ejson_dump_indent(&buf[offset], (len - offset), indentLvl);
+            }
+            offset += snprintf(&buf[offset], (len - offset), "\"%s\"", v_node->val->val.str_val.str);
+            break;
+        case EJSON_VAL_TYPE_INT:
+            if (isArray && isPretty)
+            {
+                buf[offset++] = '\r';
+                buf[offset++] = '\n';
+                offset += ejson_dump_indent(&buf[offset], (len - offset), indentLvl);
+            }
+            offset += snprintf(&buf[offset], (len - offset), "%d", v_node->val->val.i);
+            break;
+        case ESJON_VAL_TYPE_BOOLEAN:
+            if (isArray && isPretty)
+            {
+                buf[offset++] = '\r';
+                buf[offset++] = '\n';
+                offset += ejson_dump_indent(&buf[offset], (len - offset), indentLvl);
+            }
+            offset += snprintf(&buf[offset], (len - offset), "%s", v_node->val->val.booleanVal ? "true" : "false");
+            // if (isPretty)
+            // {
+            //     buf[offset++] = '\r';
+            //     buf[offset++] = '\n';
+            // }
+            break;
+        case EJSON_VAL_TYPE_NULL_OBJ:
+            if (isArray && isPretty)
+            {
+                buf[offset++] = '\r';
+                buf[offset++] = '\n';
+                offset += ejson_dump_indent(&buf[offset], (len - offset), indentLvl);
+            }
+            offset += snprintf(&buf[offset], (len - offset), "null");
+            // if (isPretty)
+            // {
+            //     buf[offset++] = '\r';
+            //     buf[offset++] = '\n';
+            // }
+            break;
+        case EJSON_VAL_TYPE_FLOAT:
+            if (isArray && isPretty)
+            {
+                buf[offset++] = '\r';
+                buf[offset++] = '\n';
+                offset += ejson_dump_indent(&buf[offset], (len - offset), indentLvl);
+            }
+            offset += snprintf(&buf[offset], (len - offset), "%.5f", v_node->val->val.f);
+            break;
+        case EJSON_VAL_TYPE_JSON:
+            // offset += snprintf(&buf[offset], (len - offset), "\r\n");
+            // if (isArray && isPretty && 0)
+            // {
+            //     buf[offset++] = '\r';
+            //     buf[offset++] = '\n';
+            // }
+            if (isArray && isPretty)
+                buf[offset++] = ' ';
+
+            offset += ejson_dumps_internal(v_node->val->val.ctx, (char *)&buf[offset], (len - offset), indentLvl, 0, isPretty);
+
+            // offset += snprintf(&buf[offset], (len - offset), "\r\n");
+
+            break;
+        default:
+            break;
+        }
+    }
+
+    if (isArray)
+    {
+        indentLvl--;
+        if (isPretty && list->num_vals > 0)
+        {
+            buf[offset++] = '\r';
+            buf[offset++] = '\n';
+            offset += ejson_dump_indent(&buf[offset], (len - offset), indentLvl);
+        }
+        buf[offset++] = ']';
+    }
+
+    return offset;
+}
+
+static int ejson_dumps_internal(struct ejson_ctx *uctx, char *buf, int len, int indentLvl, int indentFisrtLine, int isPretty)
+{
+    struct ejson_keyval_node *node;
+    struct ejson_internal_ctx *ctx = (struct ejson_internal_ctx *)uctx;
+    int k;
+    int offset = 0;
+
+    if (indentFisrtLine && isPretty)
+        offset += ejson_dump_indent(&buf[offset], (len - offset), indentLvl);
+
+    /* Start of the JSON Obj */
+    buf[offset++] = '{';
+    if (isPretty)
+    {
+        buf[offset++] = '\r';
+        buf[offset++] = '\n';
+    }
+
+    indentLvl++;
+
+    node = ctx->list_keyval.head;
+    for (k = 0; k < (ctx->list_keyval.num_keyval - 1); k++)
+    {
+        /* Apply Indent */
+        if (isPretty)
+            offset += ejson_dump_indent(&buf[offset], (len - offset), indentLvl);
+
+        offset += snprintf(&buf[offset], (len - offset), "\"%s\"", node->keyval->key);
+        if (isPretty)
+        {
+            buf[offset++] = ' ';
+            buf[offset++] = ':';
+            buf[offset++] = ' ';
+        }
+        else
+            buf[offset++] = ':';
+        offset += ejson_dump_list(node->keyval->list_val, &buf[offset], (len - offset), k, indentLvl, node->keyval->force_array, isPretty);
+        // offset += snprintf(&buf[offset], (len - offset), ",\r\n");
+        buf[offset++] = ',';
+        if (isPretty)
+        {
+            buf[offset++] = '\r';
+            buf[offset++] = '\n';
+        }
+
+        node = node->next;
+    }
+
+    /* Apply Indent */
+    if (isPretty)
+        offset += ejson_dump_indent(&buf[offset], (len - offset), indentLvl);
+
+    offset += snprintf(&buf[offset], (len - offset), "\"%s\"", node->keyval->key);
+    if (isPretty)
+    {
+        buf[offset++] = ' ';
+        buf[offset++] = ':';
+        buf[offset++] = ' ';
+    }
+    else
+        buf[offset++] = ':';
+    offset += ejson_dump_list(node->keyval->list_val, &buf[offset], (len - offset), k, indentLvl, node->keyval->force_array, isPretty);
+    // offset += snprintf(&buf[offset], (len - offset), "\r\n");
+    if (isPretty)
+    {
+        buf[offset++] = '\r';
+        buf[offset++] = '\n';
+    }
+
+    /* End of the JSON Obj */
+    indentLvl--;
+    if (isPretty)
+        offset += ejson_dump_indent(&buf[offset], (len - offset), indentLvl);
+    buf[offset++] = '}';
+
+    return offset;
+}
+
+int ejson_dumps(struct ejson_ctx *uctx, char *buf, int len, int isPretty)
+{
+    int ret;
+    ret = ejson_dumps_internal(uctx, buf, len, 0, 0, isPretty);
+    buf[ret] = '\0';
+
+    return ret;
+}
+
+struct ejson_val *ejson_create_str_val(struct ejson_ctx *uctx, const char *buf, int len)
+{
+    struct ejson_internal_ctx *ctx = (struct ejson_internal_ctx *)uctx;
+
+    /* Create new value */
+    struct ejson_val *newVal = (struct ejson_val *)ejson_malloc(ctx, sizeof(struct ejson_val));
+    newVal->type = EJSON_VAL_TYPE_STRING;
+
+    /* Create buffer for string */
+    newVal->val.str_val.str = ejson_malloc(ctx, (len + 1));
+
+    /* Copy string value and set length */
+    strncpy(newVal->val.str_val.str, buf, len);
+    newVal->val.str_val.str[len] = '\0';
+    newVal->val.str_val.len = len;
+
+    return newVal;
+}
+
+struct ejson_val *ejson_create_int_val(struct ejson_ctx *uctx, int val)
+{
+    struct ejson_internal_ctx *ctx = (struct ejson_internal_ctx *)uctx;
+
+    /* Create new value */
+    struct ejson_val *newVal = (struct ejson_val *)ejson_malloc(ctx, sizeof(struct ejson_val));
+    newVal->type = EJSON_VAL_TYPE_INT;
+
+    /* Set value */
+    newVal->val.i = val;
+
+    return newVal;
+}
+
+struct ejson_val *ejson_create_float_val(struct ejson_ctx *uctx, float val)
+{
+    struct ejson_internal_ctx *ctx = (struct ejson_internal_ctx *)uctx;
+
+    /* Create new value */
+    struct ejson_val *newVal = (struct ejson_val *)ejson_malloc(ctx, sizeof(struct ejson_val));
+    newVal->type = EJSON_VAL_TYPE_FLOAT;
+
+    /* Set value */
+    newVal->val.f = val;
+
+    return newVal;
+}
+
+struct ejson_val *ejson_create_empty_json_val(struct ejson_ctx *uctx)
+{
+    struct ejson_internal_ctx *ctx = (struct ejson_internal_ctx *)uctx;
+
+    /* Create new value */
+    struct ejson_val *newVal = (struct ejson_val *)ejson_malloc(ctx, sizeof(struct ejson_val));
+    newVal->type = EJSON_VAL_TYPE_JSON;
+
+    /* Create and initialize JSON ctx */
+    struct ejson_internal_ctx *ctxNew = (struct ejson_internal_ctx *)ejson_malloc(ctx, sizeof(struct ejson_ctx));
+    ejson_init_internal_ctx(ctxNew, ctx->spad, ctx, NULL, ctx->dbg_write);
+
+    /* Set JSON ctx to value */
+    newVal->val.ctx = (struct ejson_ctx *)ctxNew;
+
+    return newVal;
+}
+
+struct ejson_keyval *ejson_create_keyval(struct ejson_ctx *uctx, const char *key, int key_len, int forceArray)
+{
+    struct ejson_internal_ctx *ctx = (struct ejson_internal_ctx *)uctx;
+    struct ejson_keyval *newKeyVal = NULL;
+
+    /* Allocate JSON keyval element */
+    newKeyVal = (struct ejson_keyval *)ejson_malloc(ctx, sizeof(struct ejson_keyval));
+
+    /* Set if this val is to be forced as an array */
+    newKeyVal->force_array = forceArray;
+
+    /* Add key val to list */
+    ejson_keyval_list_add(ctx, newKeyVal);
+
+    /* Allocate and init val list */
+    newKeyVal->list_val = (struct ejson_val_list *)ejson_malloc(ctx, sizeof(struct ejson_val_list));
+
+    ejson_val_list_init(newKeyVal->list_val);
+
+    /* Init and set key */
+    newKeyVal->key = ejson_malloc(ctx, (key_len + 1));
+
+    /* Copy key */
+    strncpy(newKeyVal->key, key, key_len);
+    newKeyVal->key[key_len] = '\0';
+    newKeyVal->key_len = key_len;
+
+    return newKeyVal;
+}
+
+int ejson_keyval_add_val(struct ejson_ctx *uctx, struct ejson_keyval *keyval, struct ejson_val *val)
+{
+    struct ejson_internal_ctx *ctx = (struct ejson_internal_ctx *)uctx;
+
+    /* Add value to the value list */
+    ejson_val_list_add(ctx, keyval->list_val, val);
+
+    /* If value is of type JSON set the parent keyval */
+    if (val->type == EJSON_VAL_TYPE_JSON)
+        ((struct ejson_internal_ctx *)val->val.ctx)->parent_keyval = keyval;
+
+    return 0;
+}
+
+struct ejson_keyval *ejson_get_keyval(struct ejson_ctx *uctx, const char *key, int keylen)
+{
+
+    struct ejson_keyval_node *node;
+    struct ejson_keyval *keyval = NULL;
+    struct ejson_internal_ctx *ctx = (struct ejson_internal_ctx *)uctx;
+    int i;
+
+    node = ctx->list_keyval.head;
+
+    for (i = 0; i < ctx->list_keyval.num_keyval; i++)
+    {
+        /* Check if node is null */
+        if (node == NULL)
+            break;
+
+        /* Get keyval */
+
+        if (node->keyval->key_len == keylen)
+            if (strncmp(key, node->keyval->key, node->keyval->key_len) == 0)
+            {
+                keyval = node->keyval;
+                break;
+            }
+
+        node = node->next;
+    }
+
+    return keyval;
+}
+
+#if DEBUG > 3
+const char *str_val_type[] = {"UNK", "STR", "INT", "FLT", "ARR", "OBJ"};
+
+void ejson_print_list(struct ejson_val_list *list, int nodeidx, int indentLvl, char strIndent[])
+{
+    int j;
+
+    struct ejson_val_node *v_node = list->head;
+
+    if (list->num_vals > 1)
+        printf("%s[\r\n", strIndent);
+    else
+        printf("%sVal type: %s\r\n", strIndent, str_val_type[v_node->val->type]);
+
+    for (j = 0; j < list->num_vals; j++)
+    {
+        switch (v_node->val->type)
+        {
+        case EJSON_VAL_TYPE_STRING:
+            printf("%sVal %d: %s\r\n", strIndent, nodeidx, v_node->val->val.str_val.str);
+            break;
+        case EJSON_VAL_TYPE_INT:
+            printf("%sVal %d: %d\r\n", strIndent, nodeidx, v_node->val->val.i);
+            break;
+        case EJSON_VAL_TYPE_FLOAT:
+            printf("%sVal %d: %.4f\r\n", strIndent, nodeidx, v_node->val->val.f);
+            break;
+        case EJSON_VAL_TYPE_JSON:
+            printf("%sVal %d:\r\n", strIndent, nodeidx);
+            ejson_print_info(v_node->val->val.ctx, indentLvl + 1);
+            break;
+        default:
+            break;
+        }
+        v_node = v_node->next;
+    }
+
+    if (list->num_vals > 1)
+        printf("%s]\r\n", strIndent);
+}
+
+void ejson_print_info(struct ejson_ctx *uctx, int indentLvl)
+{
+    struct ejson_keyval_node *node;
+    struct ejson_internal_ctx *ctx = (struct ejson_internal_ctx *)uctx;
+    int i, j;
+    char strIndent[20] = {0};
+
+    for (j = 0; j < indentLvl; j++)
+        for (i = 0; i < 4; i++)
+            strIndent[(j * 4) + i] = ' ';
+
+    strIndent[(j * 4)] = '\0';
+
+    printf("%sNumber of keyval pairs found: %d\r\n", strIndent, ctx->list_keyval.num_keyval);
+
+    node = ctx->list_keyval.head;
+    for (i = 0; i < ctx->list_keyval.num_keyval; i++)
+    {
+
+        printf("%s-----------\r\n", strIndent);
+        printf("%sKey %d: %s\r\n", strIndent, i, node->keyval->key);
+        ejson_print_list(node->keyval->list_val, i, indentLvl, strIndent);
+        printf("%s-----------\r\n\r\n", strIndent);
+
+        node = node->next;
+    }
+}
+#endif
