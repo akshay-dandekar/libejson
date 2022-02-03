@@ -9,7 +9,7 @@
 
 struct ejson_ctx
 {
-    uint8_t res[6 * sizeof(void*) + sizeof(int) * 3 * 7 + 4 * sizeof(int)];
+    uint8_t res[10 * sizeof(void*) + sizeof(int) * 3 * 7 + 4 * sizeof(int)];
 };
 
 enum ejson_val_type
@@ -19,7 +19,7 @@ enum ejson_val_type
     ESJON_VAL_TYPE_BOOLEAN,
     EJSON_VAL_TYPE_INT,
     EJSON_VAL_TYPE_FLOAT,
-    EJSON_VAL_TYPE_JSON,
+    EJSON_VAL_TYPE_OBJ,
     EJSON_VAL_TYPE_NULL_OBJ
 };
 
@@ -60,8 +60,7 @@ struct ejson_keyval
 {
     char *key;
     int key_len;
-    int force_array;
-    struct ejson_val_list *list_val;
+    struct ejson_val *val;
 };
 
 typedef void (*debug_write_cb_t)(char *);
