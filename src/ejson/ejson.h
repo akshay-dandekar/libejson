@@ -9,7 +9,14 @@
 
 struct ejson_ctx
 {
-    uint8_t res[10 * sizeof(void*) + sizeof(int) * 3 * 7 + 4 * sizeof(int)];
+    uint8_t res[10 * sizeof(void *) + sizeof(int) * 3 * 7 + 4 * sizeof(int)];
+};
+
+enum ejson_obj_type
+{
+    EJSON_OBJ_TYPE_UNK,
+    EJSON_OBJ_TYPE_JSON,
+    EJSON_OBJ_TYPE_ARRAY
 };
 
 enum ejson_val_type
@@ -55,7 +62,6 @@ struct ejson_val_list
     struct ejson_val_node *last_added;
 };
 
-
 struct ejson_keyval
 {
     char *key;
@@ -71,15 +77,16 @@ int ejson_loads(char *buf, int len, struct ejson_ctx *uctx);
 
 int ejson_dumps(struct ejson_ctx *uctx, char *buf, int len, int isPretty);
 
-void ejson_print_info(struct ejson_ctx *uctx, int indentLvl);
+int ejson_set_ctx_type(struct ejson_ctx *uctx, enum ejson_obj_type obj_type);
+struct ejson_val *ejson_create_str_val(struct ejson_ctx *uctx, const char *buf, int len);
+struct ejson_val *ejson_create_int_val(struct ejson_ctx *uctx, int val);
+struct ejson_val *ejson_create_float_val(struct ejson_ctx *uctx, float val);
+struct ejson_val *ejson_create_empty_json_val(struct ejson_ctx *uctx);
+struct ejson_val *ejson_create_empty_array_val(struct ejson_ctx *uctx);
 
-struct ejson_val * ejson_create_str_val(struct ejson_ctx *uctx, const char *buf, int len);
-struct ejson_val * ejson_create_int_val(struct ejson_ctx *uctx, int val);
-struct ejson_val * ejson_create_float_val(struct ejson_ctx *uctx, float val);
-struct ejson_val * ejson_create_empty_json_val(struct ejson_ctx *uctx);
-
-struct ejson_keyval * ejson_create_keyval(struct ejson_ctx *uctx, const char *key, int key_len, int forceArray);
-int ejson_keyval_add_val(struct ejson_ctx *uctx, struct ejson_keyval *keyval, struct ejson_val *val);
+struct ejson_keyval *ejson_create_keyval(struct ejson_ctx *uctx, const char *key, int key_len);
+int ejson_keyval_set_val(struct ejson_keyval *keyval, struct ejson_val *val);
+int ejson_array_add_val(struct ejson_ctx *uctx, struct ejson_val *val);
 
 struct ejson_keyval *ejson_get_keyval(struct ejson_ctx *uctx, const char *key, int keylen);
 

@@ -4,12 +4,12 @@ BUILD_DIR	:= ./build
 OBJ_DIR		:= $(BUILD_DIR)/objects
 APP_DIR		:= $(BUILD_DIR)/apps
 LIB_DIR		:= $(BUILD_DIR)/lib
-TARGET		:= test/test
+TARGET		:= test/test_populate
 TARGET_LIB	:= ejson
 
 CC			:= "D:/InstalledSoftwares/msys64/mingw64/bin/gcc.exe"
 CXXFLAGS	:=
-CCFLAGS		:= -Wall
+CCFLAGS		:= -Wall -Wpedantic -Wextra
 LDFLAGS		:= 
 
 INCLUDE		:= -Isrc
