@@ -1,6 +1,10 @@
 ﻿#ifndef _EJSON_H_
 #define _EJSON_H_
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 
 #ifndef DEBUG
@@ -89,5 +93,9 @@ int ejson_keyval_set_val(struct ejson_keyval *keyval, struct ejson_val *val);
 int ejson_array_add_val(struct ejson_ctx *uctx, struct ejson_val *val);
 
 struct ejson_keyval *ejson_get_keyval(struct ejson_ctx *uctx, const char *key, int keylen);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _EJSON_H_ */
